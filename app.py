@@ -1,221 +1,323 @@
 #!/usr/bin/env python3
-"""iClicker Access Code Generator.
+"""iClicker Access Code Generator - Refactored Version.
 
 This script automates the process of logging into iClicker through various university portals,
 selecting classes, and waiting for sessions to start. It provides a complete automation solution
-for iClicker participation.
+for iClicker participation with question monitoring and email notifications.
 
 Features:
     - Automated university portal login
     - Intelligent class selection with multiple strategies
     - Session monitoring with automatic join button clicking
-    - Configurable polling intervals
-    - Headless and visible browser modes
+    - Real-time question detection and screenshot capture
+    - Email notifications with question alerts
+    - Automated answer selection and clicking
+    - Configurable polling intervals and browser modes
 
 Example:
-    $ python app.py --no-headless --class "CS 180" --polling_interval 3
+    $ python app.py --no-headless --class "CS 180" --polling_interval 3 --notif_email alert@example.com
 """
 
 import argparse
 import logging
-import os
 import sys
-import time
 from typing import Optional
 
-from dotenv import load_dotenv
-
-# Add current directory to path for imports
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from iclicker_signin import setup_chrome_driver
-from class_functions import select_class_by_name, select_class_interactive, wait_for_button, monitor_for_questions
-
-# Import Purdue login function directly
+# Import our refactored modules
+from config import load_config, setup_logging, print_startup_banner, ConfigValidationError
+from notifications import EmailNotificationService
+from monitoring import QuestionMonitor
+from utils import setup_chrome_driver, safe_quit_driver
+from ai_services import OpenAIAnswerService
+from class_functions import select_class_by_name, select_class_interactive, wait_for_button
 from school_logins.purdue_login import purdue_login
 
-# Load environment variables
-load_dotenv()
 
-def main(headless: bool = True, class_name: Optional[str] = None, polling_interval: int = 5, notification_email: Optional[str] = None) -> None:
+def main(
+    headless: bool = True,
+    class_name: Optional[str] = None,
+    polling_interval: int = 5,
+    notification_email: Optional[str] = None,
+    ai_answer_enabled: bool = False,
+    ai_model: str = "gpt-4o",
+    debug_mode: bool = False
+) -> None:
     """Main function to orchestrate the iClicker automation process.
 
-    Coordinates the entire workflow:
-    1. Loads credentials from environment
-    2. Sets up Chrome WebDriver
-    3. Performs university login
-    4. Selects target class
+    Coordinates the entire workflow using the modular architecture:
+    1. Loads and validates configuration
+    2. Sets up logging and email services
+    3. Initializes browser and performs university login
+    4. Handles class selection
     5. Waits for session to start and joins automatically
-    6. Monitors for questions with optional email notifications
+    6. Monitors for questions with automated responses
 
     Args:
-        headless: Whether to run Chrome in headless mode. Default True.
-        class_name: Name of the class to select. If None, uses interactive selection.
-        polling_interval: Seconds between polling for the join button. Default 5.
-        notification_email: Email address to send question screenshots to. Default None.
+        headless: Whether to run Chrome in headless mode
+        class_name: Name of the class to select (overrides environment)
+        polling_interval: Seconds between polling checks
+        notification_email: Email address for question notifications
+        ai_answer_enabled: Enable AI-powered answer suggestions
+        ai_model: AI model to use for suggestions
+        debug_mode: Enable debug logging and verbose output
 
     Raises:
-        SystemExit: If required environment variables are missing
+        ConfigValidationError: If configuration is invalid
+        SystemExit: If critical errors occur during execution
     """
-    
-    # Get credentials from environment
-    username = os.getenv('ICLICKER_USERNAME')
-    password = os.getenv('ICLICKER_PASSWORD')
-    class_name_env = os.getenv('ICLICKER_CLASS_NAME')
-
-    # Get email configuration from environment
-    sender_email = os.getenv('GMAIL_SENDER_EMAIL')
-    sender_password = os.getenv('GMAIL_APP_PASSWORD')
-
-    # Use class_name parameter if provided, otherwise fall back to environment variable
-    selected_class = class_name or class_name_env
-    
-    if not username or not password:
-        logging.error("Missing required environment variables: ICLICKER_USERNAME and ICLICKER_PASSWORD")
-        print("❌ Error: ICLICKER_USERNAME and ICLICKER_PASSWORD environment variables must be set")
-        print("Please create a .env file with your credentials.")
-        return
-
-    # Validate email configuration if notification email is requested
-    if notification_email and (not sender_email or not sender_password):
-        logging.error("Email notification requested but missing email credentials")
-        print("❌ Error: GMAIL_SENDER_EMAIL and GMAIL_APP_PASSWORD must be set in .env for email notifications")
-        print("Please add these to your .env file or remove the --notif_email option.")
-        return
-    
-    print("🚀 Starting iClicker Access Code Generator...")
-    print(f"👤 Username: {username}")
-    print(f"🎯 Class: {selected_class or 'Interactive selection'}")
-    print(f"🖥️  Mode: {'Headless' if headless else 'Visible'}")
-    print(f"⏱️  Polling interval: {polling_interval} seconds")
-    if notification_email:
-        print(f"📧 Email notifications: {notification_email}")
-    else:
-        print("📧 Email notifications: Disabled")
-    
-    # Set up the Chrome driver
-    driver = setup_chrome_driver(headless=headless)
-    
+    # Load and validate configuration
     try:
-        logging.info("Starting Purdue login flow")
-        # Execute Purdue login flow (gets access code)
-        access_code = purdue_login(driver, username, password)
-        
+        config = load_config(
+            headless=headless,
+            class_name=class_name,
+            polling_interval=polling_interval,
+            notification_email=notification_email,
+            ai_answer_enabled=ai_answer_enabled,
+            ai_model=ai_model,
+            debug_mode=debug_mode
+        )
+    except ConfigValidationError as e:
+        print(f"❌ Configuration Error: {e}")
+        sys.exit(1)
+
+    # Set up logging
+    setup_logging(config.debug_mode)
+    logger = logging.getLogger(__name__)
+
+    # Display startup information
+    print_startup_banner(config)
+    config.log_config_summary()
+
+    # Initialize email service if configured
+    email_service = None
+    if config.email_enabled:
+        try:
+            # Ensure the values are not None before passing
+            if config.gmail_sender_email and config.gmail_app_password:
+                email_service = EmailNotificationService(
+                    config.gmail_sender_email,
+                    config.gmail_app_password
+                )
+                # Test email connection
+                if email_service.test_connection():
+                    logger.info("Email notification service initialized and tested")
+                else:
+                    logger.warning("Email service initialized but connection test failed")
+            else:
+                logger.warning("Email configuration incomplete")
+                print("⚠️ Warning: Email configuration incomplete")
+        except Exception as e:
+            logger.error(f"Failed to initialize email service: {e}")
+            print(f"⚠️ Warning: Email service unavailable: {e}")
+            email_service = None
+
+    # Initialize AI service if configured
+    ai_service = None
+    if config.ai_enabled and config.openai_api_key:
+        try:
+            ai_service = OpenAIAnswerService(
+                config.openai_api_key,
+                config.ai_model
+            )
+            # Test AI connection
+            if ai_service.test_connection():
+                logger.info("AI answer service initialized and tested")
+            else:
+                logger.warning("AI service initialized but connection test failed")
+        except Exception as e:
+            logger.error(f"Failed to initialize AI service: {e}")
+            print(f"⚠️ Warning: AI service unavailable: {e}")
+            ai_service = None
+
+    # Set up the Chrome driver
+    driver = None
+    try:
+        logger.info("Initializing Chrome WebDriver")
+        driver = setup_chrome_driver(headless=config.headless)
+
+        # Execute Purdue login flow
+        logger.info("Starting Purdue login flow")
+        access_code = purdue_login(driver, config.iclicker_username, config.iclicker_password)
+
         if access_code:
             print(f"\n🎉 SUCCESS! Your iClicker access code is: {access_code}")
-            
-            # Now handle class selection
+            logger.info(f"iClicker access code retrieved: {access_code}")
+
+            # Handle class selection
             print("\n🎯 CLASS SELECTION")
-            if selected_class:
-                print(f"Attempting to select class: {selected_class}")
-                if not select_class_by_name(driver, selected_class):
+            class_selected = False
+
+            if config.class_name:
+                print(f"Attempting to select class: {config.class_name}")
+                if select_class_by_name(driver, config.class_name):
+                    class_selected = True
+                else:
                     print("❌ Failed to select specified class, falling back to interactive selection")
-                    if not select_class_interactive(driver):
-                        print("❌ Class selection failed")
-                        return
-            else:
-                print("No class specified, using interactive selection...")
+
+            if not class_selected:
+                print("Using interactive class selection...")
                 if not select_class_interactive(driver):
                     print("❌ Class selection failed")
                     return
-            
+
             print("✅ Class selected successfully!")
+            logger.info("Class selection completed")
 
-            # Wait for the join button to appear
+            # Wait for the join button to appear and join class
             print("\n🔘 WAITING FOR CLASS TO START")
-            if wait_for_button(driver, polling_interval=polling_interval):
+            if wait_for_button(driver, polling_interval=config.polling_interval):
                 print("✅ Join button clicked! Ready for iClicker session.")
-                print("🔒 Keeping browser open for your iClicker session...")
+                print("🔒 Starting question monitoring...")
+                logger.info("Class joined, starting question monitoring")
 
-                # Start monitoring for questions using the same polling interval
-                monitor_for_questions(driver, polling_interval=polling_interval,
-                                    notification_email=notification_email,
-                                    sender_email=sender_email,
-                                    sender_password=sender_password)
-            
+                # Initialize and start question monitoring
+                question_monitor = QuestionMonitor(
+                    driver=driver,
+                    polling_interval=config.polling_interval,
+                    email_service=email_service,
+                    ai_service=ai_service,
+                    recipient_email=config.notification_email
+                )
+
+                # Start monitoring (this will run until interrupted)
+                question_monitor.start_monitoring()
+
+            else:
+                logger.warning("Failed to join class session")
+                print("❌ Failed to join class session")
+
         else:
+            logger.error("Failed to retrieve access code")
             print("❌ Failed to retrieve access code")
-            
+
     except KeyboardInterrupt:
-        logging.info("Process interrupted by user")
+        logger.info("Process interrupted by user")
         print("\n🛑 Process interrupted by user")
     except Exception as e:
-        logging.error(f"Unexpected error: {e}", exc_info=True)
+        logger.error(f"Unexpected error: {e}", exc_info=config.debug_mode)
         print(f"❌ Unexpected error: {e}")
-        print("Check the log for more details.")
-    
+        if config.debug_mode:
+            import traceback
+            traceback.print_exc()
     finally:
-        try:
-            driver.quit()
-            logging.info("Browser closed successfully")
+        # Clean up resources
+        if driver:
+            logger.info("Cleaning up WebDriver")
+            safe_quit_driver(driver)
             print("🔒 Browser closed.")
-        except Exception as e:
-            logging.warning(f"Error closing browser: {e}")
-            print("⚠️ Warning: Error closing browser")
 
-def _create_parser() -> argparse.ArgumentParser:
+
+def create_argument_parser() -> argparse.ArgumentParser:
     """Create and configure the command line argument parser.
 
     Returns:
-        Configured ArgumentParser instance
+        Configured ArgumentParser instance with all supported options
     """
     parser = argparse.ArgumentParser(
-        description='iClicker Access Code Generator',
-        epilog='Example: python app.py --no-headless --class "CS 180" --polling_interval 3 --notif_email example@gmail.com'
+        description='iClicker Access Code Generator with Question Monitoring',
+        epilog='Example: python app.py --no-headless --class "CS 180" --polling_interval 3 --notif_email alert@example.com',
+        formatter_class=argparse.RawDescriptionHelpFormatter
     )
+
     parser.add_argument(
         '--no-headless',
         action='store_true',
-        help='Run Chrome in visible mode (not headless)'
+        help='Run Chrome in visible mode (default: headless)'
     )
+
     parser.add_argument(
         '--class',
         dest='class_name',
         help='Name of the class to select (overrides environment variable)'
     )
+
     parser.add_argument(
         '--polling_interval',
         type=int,
         default=5,
         metavar='SECONDS',
-        help='Seconds between polling for the join button (default: 5)'
+        help='Seconds between polling checks (default: 5, range: 1-300)'
     )
+
     parser.add_argument(
         '--notif_email',
         dest='notification_email',
-        help='Email address to send question screenshots to (requires GMAIL_SENDER_EMAIL and GMAIL_APP_PASSWORD in .env)'
+        help='Email address to send question screenshots to (requires Gmail credentials in .env)'
     )
+
+    parser.add_argument(
+        '--ai_answer',
+        action='store_true',
+        help='Enable AI-powered answer suggestions (requires OPENAI_API_KEY in .env)'
+    )
+
+    parser.add_argument(
+        '--ai_model',
+        default='gpt-4o',
+        help='AI model to use for answer suggestions (default: gpt-4o)'
+    )
+
+    parser.add_argument(
+        '--debug',
+        action='store_true',
+        help='Enable debug logging and verbose output'
+    )
+
+    parser.add_argument(
+        '--version',
+        action='version',
+        version='iClicker Evade v2.0.0'
+    )
+
     return parser
 
 
-def _setup_logging() -> None:
-    """Configure logging for the application."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler('iclicker_evade.log'),
-            logging.StreamHandler(sys.stdout)
-        ]
-    )
-    # Reduce selenium logging noise
-    logging.getLogger('selenium').setLevel(logging.WARNING)
-    logging.getLogger('urllib3').setLevel(logging.WARNING)
+def validate_arguments(args: argparse.Namespace) -> None:
+    """Validate command line arguments.
+
+    Args:
+        args: Parsed command line arguments
+
+    Raises:
+        SystemExit: If arguments are invalid
+    """
+    # Validate polling interval
+    if not (1 <= args.polling_interval <= 300):
+        print("❌ Error: Polling interval must be between 1 and 300 seconds")
+        sys.exit(1)
+
+    # Validate email format if provided
+    if args.notification_email:
+        from utils.validators import validate_email_address
+        if not validate_email_address(args.notification_email):
+            print(f"❌ Error: Invalid email address format: {args.notification_email}")
+            sys.exit(1)
 
 
 if __name__ == "__main__":
-    _setup_logging()
-
-    parser = _create_parser()
+    # Parse command line arguments
+    parser = create_argument_parser()
     args = parser.parse_args()
 
-    logging.info(f"Starting iClicker Evade v1.0.0")
-    logging.info(f"Arguments: headless={not args.no_headless}, class={args.class_name}, polling_interval={args.polling_interval}, notification_email={args.notification_email}")
+    # Validate arguments
+    validate_arguments(args)
 
-    # Run with headless=False if --no-headless flag is provided
-    main(
-        headless=not args.no_headless,
-        class_name=args.class_name,
-        polling_interval=args.polling_interval,
-        notification_email=args.notification_email
-    )
+    # Log startup information
+    print("=" * 60)
+    print("🚀 iClicker Evade v2.0.0 - Question Monitoring Edition")
+    print("=" * 60)
+
+    try:
+        # Run the main application
+        main(
+            headless=not args.no_headless,
+            class_name=args.class_name,
+            polling_interval=args.polling_interval,
+            notification_email=args.notification_email,
+            ai_answer_enabled=args.ai_answer,
+            ai_model=args.ai_model,
+            debug_mode=args.debug
+        )
+    except Exception as e:
+        print(f"\n💥 Fatal error: {e}")
+        sys.exit(1)

@@ -14,6 +14,7 @@ Automated iClicker access code retrieval and session management for university s
 - 📋 **Question Detection**: Real-time monitoring for iClicker questions during sessions
 - 📸 **Screenshot Capture**: Automatic full-page screenshots when questions appear
 - 📧 **Email Notifications**: Send question screenshots via Gmail when detected
+- 🤖 **AI Answer Suggestions**: GPT-4 Vision powered answer analysis and suggestions
 - 🎯 **Auto-Answer**: User-guided answer selection with automatic button clicking
 - 🔄 **Smart Polling**: Detects answered questions and waits for new ones
 - 🖥️ **Flexible Modes**: Headless or visible browser operation
@@ -43,6 +44,9 @@ Automated iClicker access code retrieval and session management for university s
    # Optional: For email notifications
    GMAIL_SENDER_EMAIL=your_gmail@gmail.com
    GMAIL_APP_PASSWORD=your_app_password
+
+   # Optional: For AI answer suggestions
+   OPENAI_API_KEY=your_openai_api_key
    ```
 
 ### Basic Usage
@@ -57,8 +61,8 @@ python app.py --no-headless
 # Specify class and polling interval
 python app.py --class "CS 180" --polling_interval 3
 
-# Full example with email notifications
-python app.py --no-headless --class "Math 161" --polling_interval 5 --notif_email student@example.com
+# Full example with email and AI
+python app.py --no-headless --class "Math 161" --polling_interval 5 --notif_email student@example.com --ai_answer
 ```
 
 ## Configuration
@@ -71,6 +75,8 @@ python app.py --no-headless --class "Math 161" --polling_interval 5 --notif_emai
 | `--class "Name"` | Specify class name directly | Interactive selection |
 | `--polling_interval N` | Seconds between session checks | `5` |
 | `--notif_email EMAIL` | Email address for question notifications | `None` (disabled) |
+| `--ai_answer` | Enable AI-powered answer suggestions | `False` (disabled) |
+| `--ai_model MODEL` | AI model to use for suggestions | `gpt-4o` |
 
 ### Environment Variables
 
@@ -87,6 +93,9 @@ ICLICKER_CLASS_NAME=your_default_class_name
 # Email notifications (both required for email functionality)
 GMAIL_SENDER_EMAIL=your_gmail@gmail.com
 GMAIL_APP_PASSWORD=your_gmail_app_password
+
+# AI answer suggestions (optional)
+OPENAI_API_KEY=your_openai_api_key
 ```
 
 #### Setting up Gmail App Password
@@ -99,6 +108,19 @@ To use email notifications, you need to set up a Gmail App Password:
    - Security → 2-Step Verification → App passwords
    - Select "Mail" and generate a password
 3. **Use the generated password** as `GMAIL_APP_PASSWORD` in your `.env` file
+
+#### Setting up OpenAI API Key
+
+To use AI-powered answer suggestions, you need an OpenAI API key:
+
+1. **Sign up at OpenAI**: Visit [OpenAI Platform](https://platform.openai.com/)
+2. **Create API Key**:
+   - Go to API Keys section
+   - Click "Create new secret key"
+   - Copy the generated key
+3. **Add to .env file**: Use the key as `OPENAI_API_KEY` in your `.env` file
+
+**Note**: GPT-4 Vision access may require a paid OpenAI account. Check [OpenAI pricing](https://openai.com/pricing) for current rates.
 
 ### Class Selection Methods
 
@@ -191,11 +213,21 @@ After joining a class, the application automatically begins monitoring for iClic
    🚨 QUESTION DETECTED! 🚨
    📋 An iClicker question has appeared on the page!
    📸 Full page screenshot saved: questions/question_20240918_143052.png
+   🤖 Getting AI answer suggestion...
+   ✅ AI analysis completed
    📧 Sending email notification...
    ✅ Email sent to student@example.com
    ❓ Question content: [question text and options]
 
-   ⚡ Select your answer (A, B, C, D, E): B
+   🤖 AI SUGGESTION:
+      Answer: B
+      Confidence: 85.2%
+      Reasoning: Based on the diagram, option B correctly identifies...
+      Model: gpt-4o
+      Processing time: 2.34s
+
+   ⚡ Select your answer (A, B, C, D, E) [AI suggests: B]:
+   Using AI suggestion: B
    🖱️  Attempting to click answer B...
    ✅ Successfully clicked answer B!
    🔄 Waiting for next question...
@@ -264,9 +296,67 @@ Sent automatically by iClicker Evade
 # Enable email notifications
 python app.py --notif_email your.email@example.com
 
-# With all options
-python app.py --no-headless --class "CS 180" --polling_interval 3 --notif_email notify@gmail.com
+# With all options including AI
+python app.py --no-headless --class "CS 180" --polling_interval 3 --notif_email notify@gmail.com --ai_answer --ai_model gpt-4o
 ```
+
+## AI Answer Suggestions
+
+The application now includes powerful AI-driven answer suggestions using OpenAI's GPT-4 Vision model:
+
+### Features
+
+- **Visual Analysis**: Analyzes question screenshots using GPT-4 Vision
+- **Smart Suggestions**: Provides answer recommendations with confidence scores
+- **Detailed Reasoning**: Explains the logic behind each suggestion
+- **Multiple Models**: Support for different OpenAI models (gpt-4o, gpt-4-vision-preview, gpt-4o-mini)
+- **Email Integration**: AI suggestions included in email notifications
+- **Easy Selection**: Press Enter to accept AI suggestion or choose your own answer
+
+### How It Works
+
+1. **Question Detection**: When a question appears, a screenshot is captured
+2. **AI Analysis**: Screenshot is sent to OpenAI GPT-4 Vision for analysis
+3. **Suggestion Display**: AI provides answer choice, confidence, and reasoning
+4. **User Choice**: Accept AI suggestion (press Enter) or choose your own answer
+5. **Email Notification**: AI suggestion included in email alerts
+
+### Supported Models
+
+| Model | Description | Best For |
+|-------|-------------|----------|
+| `gpt-4o` | Latest GPT-4 Omni model | General questions, fast responses |
+| `gpt-4o-mini` | Smaller, faster model | Simple questions, cost efficiency |
+| `gpt-4-vision-preview` | Original vision model | Complex visual analysis |
+
+### Usage Examples
+
+```bash
+# Enable AI with default model
+python app.py --ai_answer
+
+# Use specific AI model
+python app.py --ai_answer --ai_model gpt-4o-mini
+
+# Full configuration with AI
+python app.py --no-headless --class "Physics 101" --ai_answer --notif_email alerts@example.com
+```
+
+### AI Response Format
+
+The AI provides structured responses including:
+- **Answer Choice**: A, B, C, D, or E
+- **Confidence Score**: 0-100% certainty level
+- **Reasoning**: Explanation of the logic
+- **Processing Time**: Time taken for analysis
+- **Model Used**: Which AI model provided the answer
+
+### Cost Considerations
+
+- AI analysis uses OpenAI API credits
+- GPT-4 Vision typically costs ~$0.01-0.03 per question
+- Consider using `gpt-4o-mini` for cost efficiency
+- Set spending limits in your OpenAI account
 
 ## Adding University Support
 
@@ -358,6 +448,12 @@ The project follows Python best practices:
 - Authentication failed: Ensure 2FA is enabled and app password is correct
 - SMTP errors: Check internet connection and Gmail SMTP access
 - Missing attachments: Verify screenshot was saved successfully before email attempt
+
+**AI Answer Suggestions**:
+- AI not working: Verify `OPENAI_API_KEY` is set correctly in `.env`
+- API errors: Check OpenAI account status and billing
+- Slow responses: Try using `gpt-4o-mini` for faster processing
+- Poor suggestions: Ensure questions are clearly visible in screenshots
 
 ### Debug Mode
 
