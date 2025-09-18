@@ -11,6 +11,11 @@ Automated iClicker access code retrieval and session management for university s
 - 🎯 **Intelligent Class Selection**: Multiple matching strategies with fallback options
 - ⏱️ **Session Monitoring**: Automatic detection of class start with configurable polling
 - 🖱️ **Auto-Join**: Automatically clicks join button when instructor starts class
+- 📋 **Question Detection**: Real-time monitoring for iClicker questions during sessions
+- 📸 **Screenshot Capture**: Automatic full-page screenshots when questions appear
+- 📧 **Email Notifications**: Send question screenshots via Gmail when detected
+- 🎯 **Auto-Answer**: User-guided answer selection with automatic button clicking
+- 🔄 **Smart Polling**: Detects answered questions and waits for new ones
 - 🖥️ **Flexible Modes**: Headless or visible browser operation
 - 🔧 **Configurable**: Command-line options and environment variable support
 
@@ -34,6 +39,10 @@ Automated iClicker access code retrieval and session management for university s
    ICLICKER_USERNAME=your_username
    ICLICKER_PASSWORD=your_password
    ICLICKER_CLASS_NAME=your_class_name  # Optional
+
+   # Optional: For email notifications
+   GMAIL_SENDER_EMAIL=your_gmail@gmail.com
+   GMAIL_APP_PASSWORD=your_app_password
    ```
 
 ### Basic Usage
@@ -48,8 +57,8 @@ python app.py --no-headless
 # Specify class and polling interval
 python app.py --class "CS 180" --polling_interval 3
 
-# Full example
-python app.py --no-headless --class "Math 161" --polling_interval 5
+# Full example with email notifications
+python app.py --no-headless --class "Math 161" --polling_interval 5 --notif_email student@example.com
 ```
 
 ## Configuration
@@ -61,6 +70,7 @@ python app.py --no-headless --class "Math 161" --polling_interval 5
 | `--no-headless` | Run Chrome in visible mode | `False` (headless) |
 | `--class "Name"` | Specify class name directly | Interactive selection |
 | `--polling_interval N` | Seconds between session checks | `5` |
+| `--notif_email EMAIL` | Email address for question notifications | `None` (disabled) |
 
 ### Environment Variables
 
@@ -73,7 +83,22 @@ ICLICKER_PASSWORD=your_password
 
 # Optional
 ICLICKER_CLASS_NAME=your_default_class_name
+
+# Email notifications (both required for email functionality)
+GMAIL_SENDER_EMAIL=your_gmail@gmail.com
+GMAIL_APP_PASSWORD=your_gmail_app_password
 ```
+
+#### Setting up Gmail App Password
+
+To use email notifications, you need to set up a Gmail App Password:
+
+1. **Enable 2-Factor Authentication** on your Google account
+2. **Generate App Password**:
+   - Go to [Google Account Settings](https://myaccount.google.com/)
+   - Security → 2-Step Verification → App passwords
+   - Select "Mail" and generate a password
+3. **Use the generated password** as `GMAIL_APP_PASSWORD` in your `.env` file
 
 ### Class Selection Methods
 
@@ -100,6 +125,7 @@ iclicker-evade/
 ├── iclicker_signin.py     # Base iClicker navigation utilities
 ├── school_logins/         # University-specific login modules
 │   └── purdue_login.py   # Purdue University implementation
+├── questions/             # Auto-generated screenshot folder
 ├── requirements.txt       # Python dependencies
 ├── .env                  # Environment variables (create this)
 └── README.md             # This file
@@ -119,6 +145,7 @@ Class selection and session management:
 - `list_available_classes()`: Scans and displays available classes
 - `select_class_interactive()`: User-guided class selection
 - `wait_for_button()`: Session monitoring with auto-join functionality
+- `monitor_for_questions()`: Real-time question detection with screenshot capture and auto-answer
 
 #### `school_logins/`
 University-specific authentication modules. Each module provides a complete login flow for a specific university.
@@ -135,6 +162,110 @@ The application includes sophisticated session monitoring:
 ```bash
 # Monitor with 3-second intervals
 python app.py --polling_interval 3
+```
+
+## Question Monitoring & Auto-Answer
+
+After joining a class, the application automatically begins monitoring for iClicker questions:
+
+### Features
+
+- **Real-time Detection**: Monitors for question elements using iClicker's DOM structure
+- **Screenshot Capture**: Takes full-page screenshots when questions appear
+- **Smart Answer Selection**: Prompts user to choose answers (A, B, C, D, E)
+- **Automatic Clicking**: Finds and clicks the selected answer button
+- **Answered Question Detection**: Skips questions that have already been answered
+- **Continuous Monitoring**: Seamlessly transitions between questions
+
+### How It Works
+
+1. **Question Detection**: Monitors for elements at `/html/body/app-root/ng-component/div/ng-component/app-poll/main/div/app-multiple-choice-question/div[3]`
+
+2. **Screenshot Capture**:
+   - Creates `questions/` folder automatically
+   - Saves full-page screenshots as `question_YYYYMMDD_HHMMSS.png`
+   - Captures entire page content for complete question context
+
+3. **User Interaction**:
+   ```
+   🚨 QUESTION DETECTED! 🚨
+   📋 An iClicker question has appeared on the page!
+   📸 Full page screenshot saved: questions/question_20240918_143052.png
+   📧 Sending email notification...
+   ✅ Email sent to student@example.com
+   ❓ Question content: [question text and options]
+
+   ⚡ Select your answer (A, B, C, D, E): B
+   🖱️  Attempting to click answer B...
+   ✅ Successfully clicked answer B!
+   🔄 Waiting for next question...
+   ```
+
+4. **Smart State Management**:
+   - Detects when questions are already answered (via `btn-selected` class)
+   - Only processes new questions
+   - Continues monitoring seamlessly
+
+### Answer Selection Strategies
+
+The system uses multiple strategies to locate and click answer buttons:
+
+1. **Text-based matching**: Buttons containing answer letters
+2. **Class-based matching**: Elements with answer-specific CSS classes
+3. **Aria-label matching**: Accessibility labels
+4. **Radio button detection**: Input elements with answer values
+5. **Fallback clicking**: Any clickable element with answer text
+
+### Generated Files
+
+Screenshots are automatically saved to the `questions/` directory:
+```
+questions/
+├── question_20240918_143052.png
+├── question_20240918_143245.png
+└── question_20240918_144010.png
+```
+
+## Email Notifications
+
+When enabled with `--notif_email`, the application automatically sends email notifications with question screenshots:
+
+### Email Features
+
+- **Automatic Sending**: Emails sent immediately when questions are detected
+- **Gmail Integration**: Uses Gmail SMTP with app password authentication
+- **Screenshot Attachments**: Full-page screenshots attached to each email
+- **Detailed Content**: Email includes timestamp, question text, and visual context
+- **Secure Authentication**: Uses app passwords instead of main account password
+
+### Email Content
+
+Each notification email includes:
+
+```
+Subject: iClicker Question Alert - 14:30:52
+
+🚨 iClicker Question Detected! 🚨
+
+Time: 2024-09-18 14:30:52
+
+Question Content:
+[extracted question text and options]
+
+Please see the attached screenshot for the complete question and answer options.
+
+---
+Sent automatically by iClicker Evade
+```
+
+### Usage Examples
+
+```bash
+# Enable email notifications
+python app.py --notif_email your.email@example.com
+
+# With all options
+python app.py --no-headless --class "CS 180" --polling_interval 3 --notif_email notify@gmail.com
 ```
 
 ## Adding University Support
@@ -215,6 +346,18 @@ The project follows Python best practices:
 - Verify the class page is correctly loaded
 - Check if instructor has actually started the session
 - Use lower polling intervals for faster detection
+
+**Question Monitoring**:
+- Questions not appearing: Verify the DOM structure matches the expected XPath
+- Answer clicking fails: Check browser console for JavaScript errors
+- Screenshots not saving: Ensure write permissions in the project directory
+- Already answered questions still appearing: Clear browser cache or restart session
+
+**Email Notifications**:
+- Emails not sending: Verify Gmail credentials and app password in `.env`
+- Authentication failed: Ensure 2FA is enabled and app password is correct
+- SMTP errors: Check internet connection and Gmail SMTP access
+- Missing attachments: Verify screenshot was saved successfully before email attempt
 
 ### Debug Mode
 

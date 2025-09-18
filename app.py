@@ -29,7 +29,7 @@ from dotenv import load_dotenv
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from iclicker_signin import setup_chrome_driver
-from class_functions import select_class_by_name, select_class_interactive, wait_for_button
+from class_functions import select_class_by_name, select_class_interactive, wait_for_button, monitor_for_questions
 
 # Import Purdue login function directly
 from school_logins.purdue_login import purdue_login
@@ -37,7 +37,7 @@ from school_logins.purdue_login import purdue_login
 # Load environment variables
 load_dotenv()
 
-def main(headless: bool = True, class_name: Optional[str] = None, polling_interval: int = 5) -> None:
+def main(headless: bool = True, class_name: Optional[str] = None, polling_interval: int = 5, notification_email: Optional[str] = None) -> None:
     """Main function to orchestrate the iClicker automation process.
 
     Coordinates the entire workflow:
@@ -46,11 +46,13 @@ def main(headless: bool = True, class_name: Optional[str] = None, polling_interv
     3. Performs university login
     4. Selects target class
     5. Waits for session to start and joins automatically
+    6. Monitors for questions with optional email notifications
 
     Args:
         headless: Whether to run Chrome in headless mode. Default True.
         class_name: Name of the class to select. If None, uses interactive selection.
         polling_interval: Seconds between polling for the join button. Default 5.
+        notification_email: Email address to send question screenshots to. Default None.
 
     Raises:
         SystemExit: If required environment variables are missing
@@ -60,7 +62,11 @@ def main(headless: bool = True, class_name: Optional[str] = None, polling_interv
     username = os.getenv('ICLICKER_USERNAME')
     password = os.getenv('ICLICKER_PASSWORD')
     class_name_env = os.getenv('ICLICKER_CLASS_NAME')
-    
+
+    # Get email configuration from environment
+    sender_email = os.getenv('GMAIL_SENDER_EMAIL')
+    sender_password = os.getenv('GMAIL_APP_PASSWORD')
+
     # Use class_name parameter if provided, otherwise fall back to environment variable
     selected_class = class_name or class_name_env
     
@@ -69,12 +75,23 @@ def main(headless: bool = True, class_name: Optional[str] = None, polling_interv
         print("❌ Error: ICLICKER_USERNAME and ICLICKER_PASSWORD environment variables must be set")
         print("Please create a .env file with your credentials.")
         return
+
+    # Validate email configuration if notification email is requested
+    if notification_email and (not sender_email or not sender_password):
+        logging.error("Email notification requested but missing email credentials")
+        print("❌ Error: GMAIL_SENDER_EMAIL and GMAIL_APP_PASSWORD must be set in .env for email notifications")
+        print("Please add these to your .env file or remove the --notif_email option.")
+        return
     
     print("🚀 Starting iClicker Access Code Generator...")
     print(f"👤 Username: {username}")
     print(f"🎯 Class: {selected_class or 'Interactive selection'}")
     print(f"🖥️  Mode: {'Headless' if headless else 'Visible'}")
     print(f"⏱️  Polling interval: {polling_interval} seconds")
+    if notification_email:
+        print(f"📧 Email notifications: {notification_email}")
+    else:
+        print("📧 Email notifications: Disabled")
     
     # Set up the Chrome driver
     driver = setup_chrome_driver(headless=headless)
@@ -109,7 +126,12 @@ def main(headless: bool = True, class_name: Optional[str] = None, polling_interv
             if wait_for_button(driver, polling_interval=polling_interval):
                 print("✅ Join button clicked! Ready for iClicker session.")
                 print("🔒 Keeping browser open for your iClicker session...")
-                time.sleep(10)
+
+                # Start monitoring for questions using the same polling interval
+                monitor_for_questions(driver, polling_interval=polling_interval,
+                                    notification_email=notification_email,
+                                    sender_email=sender_email,
+                                    sender_password=sender_password)
             
         else:
             print("❌ Failed to retrieve access code")
@@ -139,7 +161,7 @@ def _create_parser() -> argparse.ArgumentParser:
     """
     parser = argparse.ArgumentParser(
         description='iClicker Access Code Generator',
-        epilog='Example: python app.py --no-headless --class "CS 180" --polling_interval 3'
+        epilog='Example: python app.py --no-headless --class "CS 180" --polling_interval 3 --notif_email example@gmail.com'
     )
     parser.add_argument(
         '--no-headless',
@@ -157,6 +179,11 @@ def _create_parser() -> argparse.ArgumentParser:
         default=5,
         metavar='SECONDS',
         help='Seconds between polling for the join button (default: 5)'
+    )
+    parser.add_argument(
+        '--notif_email',
+        dest='notification_email',
+        help='Email address to send question screenshots to (requires GMAIL_SENDER_EMAIL and GMAIL_APP_PASSWORD in .env)'
     )
     return parser
 
@@ -183,11 +210,12 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     logging.info(f"Starting iClicker Evade v1.0.0")
-    logging.info(f"Arguments: headless={not args.no_headless}, class={args.class_name}, polling_interval={args.polling_interval}")
+    logging.info(f"Arguments: headless={not args.no_headless}, class={args.class_name}, polling_interval={args.polling_interval}, notification_email={args.notification_email}")
 
     # Run with headless=False if --no-headless flag is provided
     main(
         headless=not args.no_headless,
         class_name=args.class_name,
-        polling_interval=args.polling_interval
+        polling_interval=args.polling_interval,
+        notification_email=args.notification_email
     )
