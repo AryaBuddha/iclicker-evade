@@ -5,11 +5,12 @@ from environment variables and command-line arguments.
 """
 
 import os
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Optional, Literal
 from dotenv import load_dotenv
 import logging
 
+AIProvider = Literal["openai", "gemini", "claude"]
 
 @dataclass
 class AppConfig:
@@ -17,31 +18,6 @@ class AppConfig:
 
     Holds all configuration values needed by the iClicker Evade application.
     Provides validation and easy access to settings.
-
-    Attributes:
-        # Required iClicker credentials
-        iclicker_username (str): University username for iClicker login
-        iclicker_password (str): University password for iClicker login
-
-        # Optional class selection
-        class_name (Optional[str]): Specific class name to select automatically
-
-        # Browser and monitoring settings
-        headless (bool): Whether to run browser in headless mode
-        polling_interval (int): Seconds between monitoring checks
-
-        # Email notification settings
-        notification_email (Optional[str]): Email to send question alerts to
-        gmail_sender_email (Optional[str]): Gmail address to send from
-        gmail_app_password (Optional[str]): Gmail app password for authentication
-
-        # AI answer suggestions
-        ai_answer_enabled (bool): Enable AI-powered answer suggestions
-        openai_api_key (Optional[str]): OpenAI API key for GPT-4 Vision
-        ai_model (str): AI model to use for suggestions
-
-        # Application behavior
-        debug_mode (bool): Enable debug logging and verbose output
     """
 
     # Required credentials
@@ -52,112 +28,89 @@ class AppConfig:
     class_name: Optional[str] = None
     headless: bool = True
     polling_interval: int = 5
+
+    # Email notifications
     notification_email: Optional[str] = None
     gmail_sender_email: Optional[str] = None
     gmail_app_password: Optional[str] = None
+
+    # AI answer suggestions
     ai_answer_enabled: bool = False
+    ai_provider: AIProvider = "openai"
+    ai_model: Optional[str] = None
     openai_api_key: Optional[str] = None
-    ai_model: str = "gpt-4o"
+    gemini_api_key: Optional[str] = None
+    claude_api_key: Optional[str] = None
+
+    # AI behavior flags
+    ai_show_answer_in_console: bool = True
+    ai_show_answer_in_notification: bool = True
+    ai_auto_answer: bool = False
+
+    # Application behavior
     debug_mode: bool = False
 
     def __post_init__(self) -> None:
-        """Validate configuration after initialization.
-
-        Raises:
-            ValueError: If required configuration is missing or invalid
-        """
+        """Validate configuration after initialization."""
         self._validate_required_fields()
         self._validate_email_config()
         self._validate_ai_config()
         self._validate_polling_interval()
 
     def _validate_required_fields(self) -> None:
-        """Validate that required configuration fields are present.
-
-        Raises:
-            ValueError: If required fields are missing or empty
-        """
         if not self.iclicker_username:
             raise ValueError("iClicker username is required")
-
         if not self.iclicker_password:
             raise ValueError("iClicker password is required")
 
     def _validate_email_config(self) -> None:
-        """Validate email configuration if email notifications are requested.
-
-        If notification_email is set, both gmail_sender_email and gmail_app_password
-        must also be provided.
-
-        Raises:
-            ValueError: If email configuration is incomplete
-        """
-        if self.notification_email:
-            if not self.gmail_sender_email:
-                raise ValueError(
-                    "GMAIL_SENDER_EMAIL must be set when using email notifications"
-                )
-            if not self.gmail_app_password:
-                raise ValueError(
-                    "GMAIL_APP_PASSWORD must be set when using email notifications"
-                )
+        if self.notification_email and not (self.gmail_sender_email and self.gmail_app_password):
+            raise ValueError("GMAIL_SENDER_EMAIL and GMAIL_APP_PASSWORD must be set for email notifications")
 
     def _validate_ai_config(self) -> None:
-        """Validate AI configuration if AI answers are enabled.
-
-        Raises:
-            ValueError: If AI configuration is incomplete
-        """
         if self.ai_answer_enabled:
-            if not self.openai_api_key:
-                raise ValueError(
-                    "OPENAI_API_KEY must be set when AI answers are enabled"
-                )
+            api_keys = {
+                "openai": self.openai_api_key,
+                "gemini": self.gemini_api_key,
+                "claude": self.claude_api_key,
+            }
+            if not api_keys.get(self.ai_provider):
+                raise ValueError(f"{self.ai_provider.upper()}_API_KEY must be set when AI answers are enabled with {self.ai_provider}")
 
     def _validate_polling_interval(self) -> None:
-        """Validate polling interval is within reasonable bounds.
-
-        Raises:
-            ValueError: If polling interval is invalid
-        """
-        if self.polling_interval < 1:
-            raise ValueError("Polling interval must be at least 1 second")
-        if self.polling_interval > 300:  # 5 minutes
-            raise ValueError("Polling interval should not exceed 300 seconds")
+        if not 1 <= self.polling_interval <= 300:
+            raise ValueError("Polling interval must be between 1 and 300 seconds")
 
     @property
     def email_enabled(self) -> bool:
-        """Check if email notifications are properly configured.
-
-        Returns:
-            True if all email settings are available, False otherwise
-        """
-        return bool(
-            self.notification_email and
-            self.gmail_sender_email and
-            self.gmail_app_password
-        )
+        """Check if email notifications are properly configured."""
+        return bool(self.notification_email and self.gmail_sender_email and self.gmail_app_password)
 
     @property
     def ai_enabled(self) -> bool:
-        """Check if AI answer suggestions are properly configured.
+        """Check if AI suggestions are properly configured for the selected provider."""
+        if not self.ai_answer_enabled:
+            return False
 
-        Returns:
-            True if AI settings are available, False otherwise
-        """
-        return bool(
-            self.ai_answer_enabled and
-            self.openai_api_key
-        )
+        provider_keys = {
+            "openai": self.openai_api_key,
+            "gemini": self.gemini_api_key,
+            "claude": self.claude_api_key,
+        }
+        return bool(provider_keys.get(self.ai_provider))
+
+    @property
+    def current_ai_api_key(self) -> Optional[str]:
+        """Get the API key for the currently configured AI provider."""
+        return {
+            "openai": self.openai_api_key,
+            "gemini": self.gemini_api_key,
+            "claude": self.claude_api_key,
+        }.get(self.ai_provider)
 
     def log_config_summary(self) -> None:
-        """Log a summary of the current configuration.
-
-        Logs key configuration values while masking sensitive information
-        like passwords and email addresses.
-        """
+        """Log a summary of the current configuration."""
         logger = logging.getLogger(__name__)
-
         logger.info("=== iClicker Evade Configuration ===")
         logger.info(f"Username: {self.iclicker_username}")
         logger.info(f"Class: {self.class_name or 'Interactive selection'}")
@@ -165,7 +118,6 @@ class AppConfig:
         logger.info(f"Polling interval: {self.polling_interval} seconds")
 
         if self.email_enabled:
-            # Mask email addresses for privacy
             masked_sender = self._mask_email(self.gmail_sender_email)
             masked_recipient = self._mask_email(self.notification_email)
             logger.info(f"Email notifications: {masked_recipient} (from {masked_sender})")
@@ -173,30 +125,21 @@ class AppConfig:
             logger.info("Email notifications: Disabled")
 
         if self.ai_enabled:
-            logger.info(f"AI answer suggestions: Enabled (model: {self.ai_model})")
+            logger.info(f"AI suggestions: Enabled (Provider: {self.ai_provider}, Model: {self.ai_model or 'default'})")
+            logger.info(f"  - Show in console: {self.ai_show_answer_in_console}")
+            logger.info(f"  - Show in notification: {self.ai_show_answer_in_notification}")
+            logger.info(f"  - Auto answer: {self.ai_auto_answer}")
         else:
             logger.info("AI answer suggestions: Disabled")
 
         logger.info(f"Debug mode: {self.debug_mode}")
 
     def _mask_email(self, email: Optional[str]) -> str:
-        """Mask an email address for logging.
-
-        Args:
-            email: Email address to mask
-
-        Returns:
-            Masked email address (e.g., "u***@example.com")
-        """
         if not email:
             return "None"
-
         try:
             local, domain = email.split('@', 1)
-            if len(local) <= 2:
-                masked_local = local
-            else:
-                masked_local = local[0] + '*' * (len(local) - 2) + local[-1]
+            masked_local = local[0] + '*' * (len(local) - 2) + local[-1] if len(local) > 2 else local
             return f"{masked_local}@{domain}"
         except ValueError:
             return "invalid@email.com"
@@ -213,74 +156,38 @@ def load_config(
     polling_interval: int = 5,
     notification_email: Optional[str] = None,
     ai_answer_enabled: bool = False,
-    ai_model: str = "gpt-4o",
+    ai_provider: AIProvider = "openai",
+    ai_model: Optional[str] = None,
+    ai_show_console: bool = True,
+    ai_show_notification: bool = True,
+    ai_auto_answer: bool = False,
     debug_mode: bool = False
 ) -> AppConfig:
-    """Load and validate application configuration.
-
-    Loads configuration from environment variables and combines with
-    command-line arguments. Validates all settings and returns a
-    complete configuration object.
-
-    Args:
-        headless: Whether to run browser in headless mode
-        class_name: Specific class name to select (overrides env var)
-        polling_interval: Seconds between monitoring checks
-        notification_email: Email address for question alerts
-        ai_answer_enabled: Enable AI-powered answer suggestions
-        ai_model: AI model to use for suggestions
-        debug_mode: Enable debug logging
-
-    Returns:
-        Validated AppConfig instance
-
-    Raises:
-        ConfigValidationError: If configuration is invalid or incomplete
-
-    Example:
-        >>> config = load_config(
-        ...     headless=False,
-        ...     class_name="CS 180",
-        ...     notification_email="student@example.com"
-        ... )
-        >>> print(f"Username: {config.iclicker_username}")
-        Username: john_doe
-    """
-    # Load environment variables from .env file
+    """Load and validate application configuration."""
     load_dotenv()
 
     try:
-        # Load required credentials from environment
-        iclicker_username = os.getenv('ICLICKER_USERNAME')
-        iclicker_password = os.getenv('ICLICKER_PASSWORD')
-
-        # Load optional settings from environment
-        class_name_env = os.getenv('ICLICKER_CLASS_NAME')
-        gmail_sender_email = os.getenv('GMAIL_SENDER_EMAIL')
-        gmail_app_password = os.getenv('GMAIL_APP_PASSWORD')
-        openai_api_key = os.getenv('OPENAI_API_KEY')
-
-        # Use command-line class name if provided, otherwise fall back to env
-        final_class_name = class_name or class_name_env
-
-        # Create and validate configuration
         config = AppConfig(
-            iclicker_username=iclicker_username or "",
-            iclicker_password=iclicker_password or "",
-            class_name=final_class_name,
+            iclicker_username=os.getenv('ICLICKER_USERNAME') or "",
+            iclicker_password=os.getenv('ICLICKER_PASSWORD') or "",
+            class_name=class_name or os.getenv('ICLICKER_CLASS_NAME'),
             headless=headless,
             polling_interval=polling_interval,
             notification_email=notification_email,
-            gmail_sender_email=gmail_sender_email,
-            gmail_app_password=gmail_app_password,
+            gmail_sender_email=os.getenv('GMAIL_SENDER_EMAIL'),
+            gmail_app_password=os.getenv('GMAIL_APP_PASSWORD'),
             ai_answer_enabled=ai_answer_enabled,
-            openai_api_key=openai_api_key,
+            ai_provider=ai_provider,
             ai_model=ai_model,
+            openai_api_key=os.getenv('OPENAI_API_KEY'),
+            gemini_api_key=os.getenv('GEMINI_API_KEY'),
+            claude_api_key=os.getenv('CLAUDE_API_KEY'),
+            ai_show_answer_in_console=ai_show_console,
+            ai_show_answer_in_notification=ai_show_notification,
+            ai_auto_answer=ai_auto_answer,
             debug_mode=debug_mode
         )
-
         return config
-
     except ValueError as e:
         raise ConfigValidationError(f"Configuration validation failed: {e}") from e
     except Exception as e:
@@ -288,51 +195,32 @@ def load_config(
 
 
 def setup_logging(debug_mode: bool = False) -> None:
-    """Set up application logging.
-
-    Configures logging with appropriate levels and formatters for both
-    console and file output.
-
-    Args:
-        debug_mode: If True, set DEBUG level; otherwise INFO level
-    """
+    """Set up application logging."""
     log_level = logging.DEBUG if debug_mode else logging.INFO
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-    # Create formatter
-    formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-
-    # Set up console handler
     console_handler = logging.StreamHandler()
     console_handler.setLevel(log_level)
     console_handler.setFormatter(formatter)
 
-    # Set up file handler
     file_handler = logging.FileHandler('iclicker_evade.log')
-    file_handler.setLevel(logging.INFO)  # Always log INFO+ to file
+    file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(formatter)
 
-    # Configure root logger
     root_logger = logging.getLogger()
     root_logger.setLevel(log_level)
-    root_logger.addHandler(console_handler)
-    root_logger.addHandler(file_handler)
+    if not root_logger.handlers:
+        root_logger.addHandler(console_handler)
+        root_logger.addHandler(file_handler)
 
-    # Reduce noise from external libraries
     logging.getLogger('selenium').setLevel(logging.WARNING)
     logging.getLogger('urllib3').setLevel(logging.WARNING)
-
     if debug_mode:
         logging.info("Debug logging enabled")
 
 
 def print_startup_banner(config: AppConfig) -> None:
-    """Print a startup banner with configuration summary.
-
-    Args:
-        config: Application configuration to display
-    """
+    """Print a startup banner with configuration summary."""
     print("🚀 Starting iClicker Access Code Generator...")
     print(f"👤 Username: {config.iclicker_username}")
     print(f"🎯 Class: {config.class_name or 'Interactive selection'}")
@@ -345,11 +233,13 @@ def print_startup_banner(config: AppConfig) -> None:
         print("📧 Email notifications: Disabled")
 
     if config.ai_enabled:
-        print(f"🤖 AI answer suggestions: Enabled ({config.ai_model})")
+        print(f"🤖 AI suggestions: Enabled (Provider: {config.ai_provider}, Model: {config.ai_model or 'default'})")
+        print(f"  - Show in console: {config.ai_show_answer_in_console}")
+        print(f"  - Show in notification: {config.ai_show_answer_in_notification}")
+        print(f"  - Auto answer: {config.ai_auto_answer}")
     else:
         print("🤖 AI answer suggestions: Disabled")
 
     if config.debug_mode:
         print("🐛 Debug mode: Enabled")
-
-    print()  # Empty line for spacing
+    print()
